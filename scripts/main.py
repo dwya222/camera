@@ -27,7 +27,7 @@ def main():
     point_goal = Point()
     # Setup OpenCV for debugging
     cv2.namedWindow("Color", cv2.WINDOW_AUTOSIZE)
-    #cv2.namedWindow("Depth", cv2.WINDOW_AUTOSIZE)
+    cv2.namedWindow("Depth", cv2.WINDOW_AUTOSIZE)
 
     # Initialize RealSense
     cfg = rs.config()
@@ -71,7 +71,7 @@ def main():
     for _ in range(30):
         pipeline.wait_for_frames()
 
-    while True:
+    while not rospy.is_shutdown():
         frames = pipeline.wait_for_frames()
         color = frames.get_color_frame()
         depth = frames.get_depth_frame()
