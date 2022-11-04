@@ -16,7 +16,8 @@ D_CAMERA_HEIGHT = 480
 BASE_TAG_SIZE = 0.143
 TARGET_TAG_SIZE = 0.026
 
-DEBUG = False
+DEBUG = True
+#DEBUG = False
 
 if DEBUG:
     print("WARNING: DEBUG mode currently enabled!\nPublisher does not work in DEBUG mode.")
@@ -63,6 +64,7 @@ def main():
                                 refine_edges=1,
                                 decode_sharpening=0.25,
                                 debug=0)
+
     base_hmat = None
     target_hmat = None
     target_vec = None
@@ -106,13 +108,6 @@ def main():
                 cv2.line(color_img, tuple(tag.corners[idx-1, :].astype(int)),
                 tuple(tag.corners[idx, :].astype(int)), (0, 255, 0))
 
-        final_vert = L.inv(base_hmat) @ target_vec # np.dot(...)
-
-        if DEBUG:
-            print(f"Base Transform:\n{base_hmat}")
-            print(f"Target Transform:\n{target_hmat}")
-            print(f"Final Vert: {final_vert}")
-
         if DEBUG:
             cv2.imshow("Color", color_img)
             #cv2.imshow("Depth", ctr_img)
@@ -122,15 +117,45 @@ def main():
                 cv2.destroyAllWindows()
                 break
 
+        try:
+            final_vert = L.inv(base_hmat) @ target_vec # np.dot(...)
+        except Exception as e:
+            rospy.logerr(f"Final vert calculation failed. Exception traceback: {e}")
+            continue
+
+        if DEBUG:
+            print(f"Base Transform:\n{base_hmat}")
+            print(f"Target Transform:\n{target_hmat}")
+            print(f"Final Vert: {final_vert}")
+
         # final position offset for location of april tag and depth of box
         point_goal.x = .14 - final_vert[2] - .05
-        point_goal.y = final_vert[0]
-        point_goal.z = .1 - final_vert[1]
+        point_goal.y = final_vert[0] - .05
+        point_goal.z = .125 - final_vert[1]
+        # David's tuned model 9/7/22 3:30 pm
+        # point_goal.x = .137 - final_vert[2] - 0.05
+        # point_goal.y = final_vert[0] - 0.05
+        # point_goal.z = .115 - final_vert[1]  - 0.025
+        # x = -final_vert[2]
+        # y = final_vert[0]
+        # z = -final_vert[1]
+        # Model 1
+        # point_goal.x = -1.50988*x + 0.521876*y - 0.88391*z + 0.8105088622167836
+        # point_goal.y = 0.116555*x + 0.967043*y - 0.0122555*z - 0.019142235446133513
+        # point_goal.z = 0.835344*x - 0.60735 *y - 0.195295*z - 0.862472468184561
+        # Model 2
+        # point_goal.x = -0.988231*x + 0.118553*y - 0.169785*z + 0.20453288331398603
+        # point_goal.y = 0.0793662*x + 0.981345*y - 0.202772*z + 0.05431255401200416
+        # point_goal.z = 0.120759*x  - 0.0506639*y  - 0.533495*z - 0.095935334741368
+        # Model 3
+        # point_goal.x = 0.961062*x + 0.10059*y - 0.0185353*z + 0.1368620622
+        # point_goal.y = -0.107118*x + 0.962997*y + 0.0104095*z -0.01481089
+        # point_goal.z = -0.0581172*x  - 0.009249*y  + 0.96769*z + 0.060088+0.08
 
         if DEBUG:
             print(f"Vertex: {final_vert}")
             print(f"Point Goal: {point_goal}")
-        else:
+        # else:
             point_publisher.publish(point_goal)
 
 
