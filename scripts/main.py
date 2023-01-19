@@ -23,8 +23,8 @@ if DEBUG:
     print("WARNING: DEBUG mode currently enabled!\nPublisher does not work in DEBUG mode.")
 
 def main():
-    rospy.init_node('point_pub')
-    point_publisher = rospy.Publisher('/point_command', Point, queue_size=1)
+    goal_object_topic = rospy.get_param('/goal_object_topic', '/goal_object_position')
+    point_publisher = rospy.Publisher(goal_object_topic, Point, queue_size=1)
     point_goal = Point()
     # Setup OpenCV for debugging
     cv2.namedWindow("Color", cv2.WINDOW_AUTOSIZE)
@@ -165,4 +165,5 @@ def hmat(R, t):
     return out
 
 if __name__ == '__main__':
+    rospy.init_node('goal_object_detector')
     main()
