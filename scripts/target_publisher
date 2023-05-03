@@ -24,7 +24,7 @@ DEBUG = True
 
 def main():
     rospy.init_node('target_publisher')
-    target_topic = '/point_command'
+    target_topic = rospy.get_param('/goal_object_topic', '/goal_object_position')
     # Setup target tag position publisher
     target_point_pub = rospy.Publisher(target_topic, Point, queue_size=1)
     # Allocate point goal msg

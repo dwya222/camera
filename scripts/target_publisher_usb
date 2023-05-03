@@ -8,7 +8,7 @@ import os
 import pyrealsense2 as rs
 from random import randint
 from scipy.spatial.transform import Rotation
-
+import time
 import rospy
 from geometry_msgs.msg import Point
 import rospkg
@@ -17,27 +17,38 @@ RGB_CAMERA_WIDTH = 1280
 RGB_CAMERA_HEIGHT = 720
 D_CAMERA_WIDTH = 640
 D_CAMERA_HEIGHT = 480
-BASE_TAG_SIZE = 0.079
 TARGET_TAG_SIZE = 0.026
-EE_TAG_SIZE = 0.0295
 
+# Setting DEBUG to true shows camera view window
 DEBUG = True
-
 if DEBUG:
     print("WARNING: DEBUG mode currently enabled!\nPublisher does not work in DEBUG mode.")
 
 def main():
-    rospy.init_node('point_pub')
-    # Setup uncalibrated point publisher
-    raw_point_publisher = rospy.Publisher('/raw_point_command', Point, queue_size=1)
-    raw_point_goal = Point()
-    # Setup calibrated point publisher
-    point_publisher = rospy.Publisher('/point_command', Point, queue_size=1)
+
+    rospy.init_node('target_publisher')
+    target_topic = '/point_command'
+    # Setup target tag position publisher
+    target_point_pub = rospy.Publisher(target_topic, Point, queue_size=1)
+    # Allocate point goal msg
     point_goal = Point()
+
+    # Load calibration model (raise exception if unable)
     rospack = rospkg.RosPack()
     ee_control_path = rospack.get_path('end_effector_control')
-    A = np.load(os.path.join(ee_control_path, 'config', 'calibration', 'A.npy'))
-    b = np.load(os.path.join(ee_control_path, 'config', 'calibration', 'b.npy'))
+    calibration_path = os.path.join(ee_control_path, 'config', 'calibration')
+    try:
+        # A = np.load(os.path.join(calibration_path, 'A.npy'))
+        A = np.array([[0, 0, -1], [1, 0, 0], [0, -1, 0]])
+        # b = np.load(os.path.join(calibration_path, 'b.npy'))
+        b = np.array([[0], [0], [0]])
+        # Setup calibrated point publisher
+        cal_ee_point_pub = rospy.Publisher('/cal_ee_position', Point, queue_size=1)
+    except FileNotFoundError as e:
+        rospy.logerr(f"Calibration model files not found in dir {ee_control_path}. Unable to "
+                     f"proceed without calibration (please calibrate). Re-raising exception...")
+        raise e
+
     # Setup OpenCV for debugging
     cv2.namedWindow("Color", cv2.WINDOW_AUTOSIZE)
     cv2.namedWindow("Depth", cv2.WINDOW_AUTOSIZE)
@@ -61,14 +72,6 @@ def main():
     PRINCIPAL_Y = rgb_intrinsics.ppy
 
     # Setup AprilTags Detector
-    base_detector = Detector(families='tag36h11',
-                             nthreads=1,
-                             quad_decimate=1.0,
-                             quad_sigma=0.0,
-                             refine_edges=1,
-                             decode_sharpening=0.25,
-                             debug=0)
-
     target_detector = Detector(families='tagStandard41h12',
                                nthreads=1,
                                quad_decimate=1.0,
@@ -76,22 +79,17 @@ def main():
                                refine_edges=1,
                                decode_sharpening=0.25,
                                debug=0)
-
-    ee_detector = Detector(families='tagStandard52h13',
-                           nthreads=1,
-                           quad_decimate=1.0,
-                           quad_sigma=0.0,
-                           refine_edges=1,
-                           decode_sharpening=0.25,
-                           debug=0)
-    base_hmat = None
-    target_hmat = None
+    # target_hmat = None
     target_vec = None
 
     # Let camera warm up for some frames
     for _ in range(30):
         pipeline.wait_for_frames()
-
+    prev = Point()
+    prev.x = 0.0
+    prev.y = 0.0
+    prev.z = 0.0
+    counter = 0
     while not rospy.is_shutdown():
         frames = pipeline.wait_for_frames()
         color = frames.get_color_frame()
@@ -107,22 +105,10 @@ def main():
         gray = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY)
 
         camera_params = (FOCAL_X, FOCAL_Y, PRINCIPAL_X, PRINCIPAL_Y)
-        base_tags = base_detector.detect(gray, True, camera_params, BASE_TAG_SIZE)
-
-        for tag in base_tags:
-            if DEBUG:
-                pass#print("Found base tag!")
-            base_hmat = hmat(tag.pose_R, tag.pose_t)
-            for idx in range(len(tag.corners)):
-                cv2.line(color_img, tuple(tag.corners[idx-1, :].astype(int)),
-                         tuple(tag.corners[idx, :].astype(int)), (255, 0, 0))
-                draw_pose_axes(color_img, camera_params, BASE_TAG_SIZE, tag.pose_R, tag.pose_t,
-                               tag.center)
 
         target_tags = target_detector.detect(gray, True, camera_params, TARGET_TAG_SIZE)
-        ee_tags = ee_detector.detect(gray, True, camera_params, EE_TAG_SIZE)
         for tag in target_tags:
-            target_hmat = hmat(tag.pose_R, tag.pose_t)
+            # target_hmat = hmat(tag.pose_R, tag.pose_t)
             target_vec = np.append(tag.pose_t, 1)
             for idx in range(len(tag.corners)):
                 cv2.line(color_img, tuple(tag.corners[idx-1, :].astype(int)),
@@ -130,48 +116,34 @@ def main():
                 draw_pose_axes(color_img, camera_params, TARGET_TAG_SIZE, tag.pose_R, tag.pose_t,
                                tag.center)
 
-        for tag in ee_tags:
-            ee_hmat = hmat(tag.pose_R, tag.pose_t)
-            ee_vec = np.append(tag.pose_t, 1)
-            for idx in range(len(tag.corners)):
-                cv2.line(color_img, tuple(tag.corners[idx-1, :].astype(int)),
-                         tuple(tag.corners[idx, :].astype(int)), (0, 0, 255))
-                draw_pose_axes(color_img, camera_params, EE_TAG_SIZE, tag.pose_R, tag.pose_t,
-                               tag.center)
-
         if DEBUG:
             cv2.imshow("Color", color_img)
             #cv2.imshow("Depth", ctr_img)
             k = cv2.waitKey(1)
 
-            if k == 27:
-                cv2.destroyAllWindows()
-                break
-
+        # publish target point
         try:
-            final_vert = L.inv(base_hmat) @ ee_vec # np.dot(...)
-        except Exception as e:
-            rospy.logerr(f"Final vert calculation failed. Exception traceback: {e}")
-            continue
-
-        if DEBUG:
-            rospy.loginfo(f"ee_hmat: \n{target_hmat}")
-            rospy.loginfo(f"ee_pose_t: \n{ee_vec}")
-
-        # publish raw point
-        point_goal.x = ee_vec[0]
-        point_goal.y = ee_vec[1]
-        point_goal.z = ee_vec[2]
-        raw_point_publisher.publish(point_goal)
-
-        # publish calibrated point
-        np_point = np.array([[point_goal.x], [point_goal.y], [point_goal.z]])
-        calibrated_np_point = A @ np_point + b
-        point_goal.x = calibrated_np_point[0]
-        point_goal.y = calibrated_np_point[1]
-        point_goal.z = calibrated_np_point[2]
-        point_publisher.publish(point_goal)
-
+            np_point = np.array([[target_vec[0]], [target_vec[1]], [target_vec[2]]])
+            calibrated_np_point = A @ np_point + b
+            point_goal.x = calibrated_np_point[0]
+            point_goal.y = calibrated_np_point[1]
+            point_goal.z = calibrated_np_point[2]
+            delta = Point()
+            delta.x = point_goal.x - prev.x
+            delta.y = point_goal.y - prev.y
+            delta.z = point_goal.z - prev.z
+            if counter == 0:
+                delta.x, delta.y, delta.z = 0, 0, 0
+                prev.x = point_goal.x
+                prev.y = point_goal.y
+                prev.z = point_goal.z
+            if DEBUG:   print(delta)
+            #if DEBUG:   time.sleep(3)
+            target_point_pub.publish(delta)
+            counter+=1
+        except TypeError as e:
+            rospy.logwarn("TypeError caught. Camera likely unable to find target AprilTag, is it "
+                          f"in view?. \nTraceback: {e}")
 
 def pose_to_hmat(pose):
     # unused
@@ -182,13 +154,12 @@ def pose_to_hmat(pose):
     return hmat(r_mat, t)
 
 def hmat(R, t):
+    # unused
     out = np.hstack((R, t))
     out = np.vstack((out, [0,0,0,1]))
     return out
 
 def draw_pose_axes(overlay, camera_params, tag_size, pose_R, pose_t, center):
-
-    # pose_R = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]]) @ pose_R
     fx, fy, cx, cy = camera_params
     K = np.array([fx, 0, cx, 0, fy, cy, 0, 0, 1]).reshape(3, 3)
 
@@ -210,6 +181,7 @@ def draw_pose_axes(overlay, camera_params, tag_size, pose_R, pose_t, center):
     cv2.line(overlay, center, tuple(ipoints[0].ravel()), (0,0,255), 2)
     cv2.line(overlay, center, tuple(ipoints[1].ravel()), (0,255,0), 2)
     cv2.line(overlay, center, tuple(ipoints[2].ravel()), (255,0,0), 2)
+
 
 if __name__ == '__main__':
     main()
